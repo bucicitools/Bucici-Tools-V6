@@ -1163,56 +1163,24 @@ export async function register(input: {
   licenseCode?: string;
   businessName?: string;
 }): Promise<User> {
-  const { data: hasSA } = await supabase.rpc("has_any_super_admin");
-  const isFirst = !hasSA;
-
-  if (!isFirst) {
-    if (!input.licenseCode || !/^BUCICI-[A-Za-z0-9]{4,}$/.test(input.licenseCode)) {
-      throw new Error("Format kode lisensi salah. Contoh: BUCICI-XXXX");
-    }
-    if (!input.businessName) throw new Error("Nama Toko wajib diisi.");
-    const { data: available, error: preErr } = await supabase.rpc("license_available", {
-      _code: input.licenseCode,
-    });
-    if (preErr) throw new Error(preErr.message);
-    if (!available) throw new Error("Kode lisensi tidak ditemukan atau sudah dipakai.");
+  if (input.password.length < 8) {
+    throw new Error("Kata sandi minimal 8 karakter.");
   }
 
-  const emailRedirectTo = typeof window !== "undefined" ? window.location.origin : undefined;
-  const { data: signup, error } = await supabase.auth.signUp({
-    email: input.email,
-    password: input.password,
-    options: { data: { name: input.name }, emailRedirectTo },
+  // Call server-side registration endpoint
+  const res = await fetch("/api/public/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
   });
-  if (error) throw new Error(error.message);
-  if (!signup.user) throw new Error("Pendaftaran gagal.");
 
-  if (!isFirst && typeof window !== "undefined") {
-    localStorage.setItem(
-      "bucici_pending_redeem",
-      JSON.stringify({
-        licenseCode: input.licenseCode,
-        businessName: input.businessName,
-        name: input.name,
-      }),
-    );
+  const data = (await res.json()) as { error?: string; ok?: boolean };
+  if (!res.ok || data.error) {
+    throw new Error(data.error || "Gagal mendaftar. Silakan periksa kembali data Anda.");
   }
 
-  if (!signup.session) {
-    throw new Error(
-      "Cek inbox email Anda untuk verifikasi. Setelah itu login untuk mengaktifkan toko Anda sebagai Owner.",
-    );
-  }
-
-  await supabase
-    .from("profiles")
-    .upsert({ id: signup.user.id, name: input.name, email: input.email });
-
-  if (!isFirst) await runPendingRedeem();
-
-  await hydrateFromSupabase();
-  const me = currentUser();
-  if (!me) throw new Error("Gagal memuat profil setelah pendaftaran.");
+  // Automatically sign in the user
+  const me = await login(input.email, input.password);
   return me;
 }
 

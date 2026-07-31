@@ -1,38 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
-import {
-  KeyRound,
-  Save,
-  Eye,
-  EyeOff,
-  Shield,
-  ExternalLink,
-  Lock,
-  Percent,
-  Trash2,
-  AlertTriangle,
-  X,
-  Plus,
-} from "lucide-react";
+import { Save, Shield, Lock, Percent, Trash2, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { currentUser, currentTenant, db } from "@/lib/store";
 import { supabase } from "@/integrations/supabase/client";
-import { saveGeminiKeySlot, readGeminiKeySlot, getAllGeminiKeys } from "@/lib/gemini";
 
 export const Route = createFileRoute("/app/pengaturan")({ component: Pengaturan });
 
 function Pengaturan() {
   const me = currentUser();
   const tenant = currentTenant();
-
-  // Key rotation: 3 slots
-  const [keys, setKeys] = useState<[string, string, string]>(() => [
-    readGeminiKeySlot(1),
-    readGeminiKeySlot(2),
-    readGeminiKeySlot(3),
-  ]);
-  const [showKey, setShowKey] = useState<[boolean, boolean, boolean]>([false, false, false]);
-  const [savingKey, setSavingKey] = useState(false);
 
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -47,96 +24,6 @@ function Pengaturan() {
   const [resetConfirmInput, setResetConfirmInput] = useState("");
   const [loadingReset, setLoadingReset] = useState(false);
   const [resetError, setResetError] = useState("");
-
-  function updateKey(idx: 0 | 1 | 2, val: string) {
-    setKeys((prev) => {
-      const next: [string, string, string] = [...prev] as [string, string, string];
-      next[idx] = val;
-      return next;
-    });
-  }
-
-  function toggleShow(idx: 0 | 1 | 2) {
-    setShowKey((prev) => {
-      const next: [boolean, boolean, boolean] = [...prev] as [boolean, boolean, boolean];
-      next[idx] = !next[idx];
-      return next;
-    });
-  }
-
-  async function saveAllKeys() {
-    setSavingKey(true);
-    try {
-      saveGeminiKeySlot(1, keys[0]);
-      saveGeminiKeySlot(2, keys[1]);
-      saveGeminiKeySlot(3, keys[2]);
-
-      // Also update store (in-memory, legacy)
-      if (me) {
-        db.set((n) => {
-          const u = n.users.find((x) => x.id === me.id);
-          if (u) u.geminiApiKey = keys[0].trim() || undefined;
-        });
-      }
-
-      // Persist primary key to Supabase profiles
-      try {
-        const { data: authData } = await supabase.auth.getUser();
-        const uid = authData?.user?.id;
-        if (uid) {
-          await supabase
-            .from("profiles")
-            .update({ gemini_api_key: keys[0].trim() || null })
-            .eq("id", uid);
-        }
-      } catch {
-        // Non-fatal
-      }
-
-      const activeCount = keys.filter((k) => k.trim()).length;
-      toast.success(
-        activeCount > 1
-          ? `${activeCount} kunci AI tersimpan! Rotasi otomatis aktif.`
-          : activeCount === 1
-            ? "Kunci AI tersimpan!"
-            : "Semua kunci AI dihapus.",
-      );
-    } catch {
-      toast.error("Gagal menyimpan kunci. Coba lagi.");
-    } finally {
-      setSavingKey(false);
-    }
-  }
-
-  async function clearAllKeys() {
-    setKeys(["", "", ""]);
-    setSavingKey(true);
-    try {
-      saveGeminiKeySlot(1, "");
-      saveGeminiKeySlot(2, "");
-      saveGeminiKeySlot(3, "");
-      if (me) {
-        db.set((n) => {
-          const u = n.users.find((x) => x.id === me.id);
-          if (u) u.geminiApiKey = undefined;
-        });
-      }
-      try {
-        const { data: authData } = await supabase.auth.getUser();
-        const uid = authData?.user?.id;
-        if (uid) {
-          await supabase.from("profiles").update({ gemini_api_key: null }).eq("id", uid);
-        }
-      } catch {
-        // Non-fatal
-      }
-      toast.success("Semua kunci AI dihapus.");
-    } catch {
-      toast.error("Gagal menghapus kunci. Coba lagi.");
-    } finally {
-      setSavingKey(false);
-    }
-  }
 
   async function handleUpdatePassword(e: React.FormEvent) {
     e.preventDefault();
@@ -350,97 +237,6 @@ function Pengaturan() {
           </button>
         </div>
       )}
-
-      {/* Kunci AI Pribadi — Key Rotation */}
-      <div className="rounded-2xl neu p-4">
-        <h2 className="font-semibold text-sm flex items-center gap-2 mb-1">
-          <KeyRound size={16} /> Kunci AI Pribadi (BYOK)
-        </h2>
-        <p className="text-xs text-muted-foreground mb-1">
-          Masukkan hingga <b>3 API Key</b> Gemini. Jika key pertama terkena limit, app otomatis
-          pakai key berikutnya.
-        </p>
-        <p className="text-xs text-muted-foreground mb-3">
-          Dapatkan key gratis (bisa buat banyak) di{" "}
-          <a
-            href="https://aistudio.google.com/apikey"
-            target="_blank"
-            rel="noreferrer"
-            className="underline text-primary inline-flex items-center gap-1"
-          >
-            aistudio.google.com/apikey <ExternalLink size={10} />
-          </a>
-          .
-        </p>
-
-        <div className="space-y-3">
-          {([0, 1, 2] as const).map((idx) => (
-            <div key={idx}>
-              <label className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
-                <Plus size={10} className="opacity-50" />
-                Key {idx + 1}{" "}
-                {idx === 0 ? (
-                  <span className="text-primary font-semibold">(Utama)</span>
-                ) : (
-                  <span className="opacity-50">(Cadangan)</span>
-                )}
-              </label>
-              <div className="relative">
-                <input
-                  value={keys[idx]}
-                  onChange={(e) => updateKey(idx, e.target.value)}
-                  type={showKey[idx] ? "text" : "password"}
-                  placeholder={
-                    idx === 0
-                      ? "Wajib diisi untuk aktifkan fitur AI"
-                      : "Opsional — cadangan jika key utama limit"
-                  }
-                  className="w-full rounded-lg neu-inset px-3 py-2 pr-10 text-sm font-mono"
-                />
-                <button
-                  type="button"
-                  onClick={() => toggleShow(idx)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground p-1"
-                >
-                  {showKey[idx] ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-4 flex items-center gap-2">
-          <button
-            onClick={saveAllKeys}
-            disabled={savingKey}
-            className="rounded-xl bg-primary text-primary-foreground px-4 py-2 text-sm font-semibold flex items-center gap-2 disabled:opacity-50"
-          >
-            <Save size={14} /> {savingKey ? "Menyimpan..." : "Simpan Semua Key"}
-          </button>
-          {activeCount > 0 && (
-            <button
-              onClick={clearAllKeys}
-              disabled={savingKey}
-              className="rounded-xl border border-destructive/40 text-destructive px-3 py-2 text-sm font-semibold flex items-center gap-1.5 hover:bg-destructive/10 transition disabled:opacity-50"
-            >
-              <X size={14} /> Hapus Semua
-            </button>
-          )}
-        </div>
-
-        {activeCount > 0 ? (
-          <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-2">
-            ✓ {activeCount} kunci aktif.{" "}
-            {activeCount > 1
-              ? `Rotasi otomatis aktif — jika key 1 limit, otomatis ke key 2${activeCount > 2 ? " & 3" : ""}.`
-              : "Tambah key cadangan untuk rotasi otomatis."}
-          </p>
-        ) : (
-          <p className="text-xs text-amber-500 mt-2">
-            ⚠ Belum ada kunci aktif. Isi minimal Key 1 dan simpan.
-          </p>
-        )}
-      </div>
 
       {/* Hapus Data Keuangan */}
       {isOwner && (

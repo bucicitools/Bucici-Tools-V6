@@ -187,7 +187,8 @@ function LoginPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="input-neu pr-10"
-                    minLength={6}
+                    minLength={8}
+                    placeholder="•••••••• (minimal 8 karakter)"
                   />
                   <button
                     type="button"
@@ -262,7 +263,7 @@ function ForgotPasswordModal({ onClose }: { onClose: () => void }) {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!email || !business || !code || !pw) return toast.error("Lengkapi semua kolom.");
-    if (pw.length < 6) return toast.error("Password minimal 6 karakter.");
+    if (pw.length < 8) return toast.error("Password minimal 8 karakter.");
     setBusy(true);
     try {
       const res = await fetch("/api/public/reset-password", {

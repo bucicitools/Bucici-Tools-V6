@@ -4,6 +4,7 @@ import { Send, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { askGemini } from "@/lib/gemini";
 import { currentTenant, db, formatIDR } from "@/lib/store";
+import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 
 export const Route = createFileRoute("/app/kasir/ai")({ component: AITenant });
 
@@ -67,9 +68,13 @@ Jawab dalam Bahasa Indonesia dengan gaya ramah. Gunakan Markdown termasuk tabel 
         {msgs.map((m, i) => (
           <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
             <div
-              className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm whitespace-pre-wrap ${m.role === "user" ? "bg-gradient-primary text-primary-foreground" : "bg-secondary"}`}
+              className={`max-w-[90%] sm:max-w-[85%] rounded-2xl px-4 py-3 text-sm ${
+                m.role === "user"
+                  ? "bg-gradient-primary text-primary-foreground whitespace-pre-wrap"
+                  : "bg-secondary text-secondary-foreground"
+              }`}
             >
-              {m.text}
+              {m.role === "assistant" ? <MarkdownRenderer content={m.text} /> : m.text}
             </div>
           </div>
         ))}

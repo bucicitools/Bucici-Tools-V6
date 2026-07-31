@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { askGemini } from "@/lib/gemini";
 import { db } from "@/lib/store";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
+import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 
 export const Route = createFileRoute("/admin/ai")({
   component: AISuperAdmin,
@@ -105,8 +106,8 @@ Jawab dalam Bahasa Indonesia, gunakan Markdown termasuk tabel bila relevan.`;
           </button>
         </div>
         {answer && (
-          <div className="mt-4 rounded-xl bg-secondary/50 p-4 text-sm whitespace-pre-wrap font-[Inter,ui-sans-serif]">
-            {answer}
+          <div className="mt-4 rounded-xl bg-secondary/50 p-4 text-sm">
+            <MarkdownRenderer content={answer} />
           </div>
         )}
       </div>

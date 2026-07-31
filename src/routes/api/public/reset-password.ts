@@ -20,8 +20,8 @@ export const Route = createFileRoute("/api/public/reset-password")({
               { status: 400 },
             );
           }
-          if (newPassword.length < 6) {
-            return Response.json({ error: "Password minimal 6 karakter." }, { status: 400 });
+          if (newPassword.length < 8) {
+            return Response.json({ error: "Password minimal 8 karakter." }, { status: 400 });
           }
           if (!/^BUCICI-[A-Za-z0-9]{4,}$/i.test(licenseCode)) {
             return Response.json({ error: "Format kode lisensi salah." }, { status: 400 });

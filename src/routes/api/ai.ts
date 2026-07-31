@@ -28,11 +28,15 @@ export const Route = createFileRoute("/api/ai")({
               ? import.meta.env.VITE_GEMINI_API_KEY
               : undefined);
 
-          const candidateKeys: string[] = [
-            ...keys.filter((k) => typeof k === "string" && k.trim().length > 0),
-          ];
+          const isCandidateValid = (k: unknown): k is string =>
+            typeof k === "string" &&
+            k.trim().length >= 10 &&
+            k.trim() !== "undefined" &&
+            k.trim() !== "null";
 
-          if (serverDevKey && typeof serverDevKey === "string" && serverDevKey.trim()) {
+          const candidateKeys: string[] = [...keys.filter(isCandidateValid).map((k) => k.trim())];
+
+          if (serverDevKey && isCandidateValid(serverDevKey)) {
             candidateKeys.push(serverDevKey.trim());
           }
 
@@ -71,24 +75,21 @@ export const Route = createFileRoute("/api/ai")({
               return Response.json({ text, usedKeyIndex: i });
             } catch (err) {
               const errorMsg = err instanceof Error ? err.message : String(err);
-              console.error(`[API /api/ai] key #${i} failed:`, errorMsg);
+              console.warn(`[API /api/ai] key #${i} key attempt notice:`, errorMsg);
               lastErrorMsg = errorMsg;
 
+              const lower = errorMsg.toLowerCase();
               if (
-                errorMsg.includes("429") ||
-                errorMsg.toLowerCase().includes("quota") ||
-                errorMsg.toLowerCase().includes("rate limit") ||
-                errorMsg.toLowerCase().includes("resource_exhausted")
+                lower.includes("429") ||
+                lower.includes("quota") ||
+                lower.includes("rate limit") ||
+                lower.includes("resource_exhausted")
               ) {
                 isRateLimited = true;
-                continue; // Try next key in loop
               }
 
-              if (errorMsg.includes("403") || errorMsg.toLowerCase().includes("api key")) {
-                continue; // Try next key if this key is invalid
-              }
-
-              break;
+              // Always continue to try remaining candidate keys regardless of individual key failure
+              continue;
             }
           }
 
@@ -106,8 +107,11 @@ export const Route = createFileRoute("/api/ai")({
           }
 
           return Response.json(
-            { error: lastErrorMsg || "Gagal menghubungi AI. Coba lagi." },
-            { status: 500 },
+            {
+              error:
+                "API Key Gemini tidak valid atau tidak memiliki akses. Silakan masukkan Kunci AI Pribadi di Pengaturan → Kunci AI Pribadi.",
+            },
+            { status: 400 },
           );
         } catch (err) {
           console.error("[API /api/ai handler error]", err);
