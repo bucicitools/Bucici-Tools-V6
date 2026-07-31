@@ -75,7 +75,6 @@ export const Route = createFileRoute("/api/ai")({
               return Response.json({ text, usedKeyIndex: i });
             } catch (err) {
               const errorMsg = err instanceof Error ? err.message : String(err);
-              console.warn(`[API /api/ai] key #${i} key attempt notice:`, errorMsg);
               lastErrorMsg = errorMsg;
 
               const lower = errorMsg.toLowerCase();
