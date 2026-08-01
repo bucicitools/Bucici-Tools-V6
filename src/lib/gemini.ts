@@ -118,26 +118,21 @@ export class GeminiQuotaExhaustedError extends Error {
 // ─── Direct REST Fallback ─────────────────────────────────────────────────────
 
 /**
- * Auth header strategy for different key formats:
- * - AQ. prefix (new Google AI Studio auth keys): use Authorization: Bearer
- * - AIzaSy prefix (standard API keys): use x-goog-api-key header
- * - Unknown format: try x-goog-api-key first (most common)
- *
- * 401 Unauthorized is the signal that the wrong auth method was used.
+ * All Gemini API key formats (AQ. and AIzaSy) use x-goog-api-key header.
+ * Do NOT use Authorization: Bearer — that expects an OAuth2 token, not an API key.
+ * The ?key= query param is deprecated and should not be used.
  */
 function buildRequest(
   endpoint: string,
   key: string,
 ): { url: string; headers: Record<string, string> } {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (key.startsWith("AQ.") || key.startsWith("AQ-")) {
-    // New Google AI Studio auth key format — requires Bearer token auth
-    headers["Authorization"] = `Bearer ${key}`;
-  } else {
-    // Standard API key format (AIzaSy...) — use x-goog-api-key header
-    headers["x-goog-api-key"] = key;
-  }
-  return { url: endpoint, headers };
+  return {
+    url: endpoint,
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": key,
+    },
+  };
 }
 
 async function askGeminiDirectRest(prompt: string, system?: string): Promise<string> {
@@ -168,9 +163,7 @@ async function askGeminiDirectRest(prompt: string, system?: string): Promise<str
     if (res.status === 400 || res.status === 401 || res.status === 403) {
       const t = await res.text();
       console.warn(`[askGeminiDirectRest] key[${i}] rejected (${res.status}): ${t.slice(0, 150)}`);
-      lastError = new Error(
-        `Gemini error ${res.status}: ${t.slice(0, 200)}`,
-      );
+      lastError = new Error(`Gemini error ${res.status}: ${t.slice(0, 300)}`);
       continue;
     }
 
