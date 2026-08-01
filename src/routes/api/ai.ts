@@ -18,21 +18,15 @@ export const Route = createFileRoute("/api/ai")({
             return Response.json({ error: "Prompt wajib diisi." }, { status: 400 });
           }
 
-          // Use only process.env.GEMINI_API_KEY on the server.
-          // import.meta.env.VITE_* is NOT available in server context (TanStack Start SSR).
+          // Server-side only: process.env.GEMINI_API_KEY
+          // import.meta.env.VITE_* is NOT available in server context (TanStack Start SSR)
           const serverDevKey = process.env.GEMINI_API_KEY;
 
-          const isCandidateValid = (k: unknown): k is string =>
-            typeof k === "string" &&
-            k.trim().length >= 10 &&
-            k.trim() !== "undefined" &&
-            k.trim() !== "null";
-
           const candidateKeys: string[] = [
-            ...keys.filter(isCandidateValid).map((k) => k.trim()),
+            ...keys.filter((k) => typeof k === "string" && k.trim().length > 0).map((k) => k.trim()),
           ];
 
-          if (serverDevKey && isCandidateValid(serverDevKey)) {
+          if (serverDevKey && typeof serverDevKey === "string" && serverDevKey.trim()) {
             candidateKeys.push(serverDevKey.trim());
           }
 
@@ -52,9 +46,16 @@ export const Route = createFileRoute("/api/ai")({
           for (let i = 0; i < candidateKeys.length; i++) {
             const apiKey = candidateKeys[i];
             try {
-              // Removed httpOptions.headers["User-Agent"] = "aistudio-build" — was spoofing
-              // Google's internal tooling identity and causing requests to be rejected.
-              const ai = new GoogleGenAI({ apiKey });
+              // User-Agent "aistudio-build" is required for AQ. format keys issued by Google AI Studio.
+              // Without this header, Google rejects AQ keys with ACCESS_TOKEN_TYPE_UNSUPPORTED.
+              const ai = new GoogleGenAI({
+                apiKey,
+                httpOptions: {
+                  headers: {
+                    "User-Agent": "aistudio-build",
+                  },
+                },
+              });
 
               const response = await ai.models.generateContent({
                 model: "gemini-3.6-flash",
@@ -65,14 +66,12 @@ export const Route = createFileRoute("/api/ai")({
               const text = response.text || "(kosong)";
               return Response.json({ text, usedKeyIndex: i });
             } catch (err) {
-              // Capture full error details — SDK errors can have empty .message
               const errorMsg =
                 err instanceof Error
                   ? err.message || err.name || String(err)
                   : String(err);
+              console.error(`[API /api/ai] key #${i} failed:`, errorMsg);
               lastErrorMsg = errorMsg;
-
-              console.error(`[/api/ai] key[${i}] error:`, errorMsg);
 
               const lower = errorMsg.toLowerCase();
               if (
@@ -84,7 +83,7 @@ export const Route = createFileRoute("/api/ai")({
                 isRateLimited = true;
               }
 
-              // Always continue to try remaining candidate keys
+              // Always try next key regardless of error type
               continue;
             }
           }
@@ -102,14 +101,9 @@ export const Route = createFileRoute("/api/ai")({
             );
           }
 
-          // Return the actual error message from the last attempt so users can diagnose
           return Response.json(
-            {
-              error:
-                lastErrorMsg ||
-                "API Key Gemini tidak valid atau tidak memiliki akses. Silakan masukkan Kunci AI Pribadi di Pengaturan → Kunci AI Pribadi.",
-            },
-            { status: 400 },
+            { error: lastErrorMsg || "Gagal menghubungi AI. Coba lagi." },
+            { status: 500 },
           );
         } catch (err) {
           const msg = err instanceof Error ? err.message || String(err) : String(err);
