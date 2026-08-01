@@ -18,15 +18,9 @@ export const Route = createFileRoute("/api/ai")({
             return Response.json({ error: "Prompt wajib diisi." }, { status: 400 });
           }
 
-          // Gather candidate keys:
-          // 1. Personal keys passed from client
-          // 2. Server process.env.GEMINI_API_KEY
-          const serverDevKey =
-            process.env.GEMINI_API_KEY ||
-            process.env.VITE_GEMINI_API_KEY ||
-            (typeof import.meta !== "undefined" && import.meta.env
-              ? import.meta.env.VITE_GEMINI_API_KEY
-              : undefined);
+          // Bug fix #5: Use only process.env.GEMINI_API_KEY on the server.
+          // import.meta.env.VITE_* is NOT available in server context (TanStack Start SSR).
+          const serverDevKey = process.env.GEMINI_API_KEY;
 
           const isCandidateValid = (k: unknown): k is string =>
             typeof k === "string" &&
@@ -34,7 +28,9 @@ export const Route = createFileRoute("/api/ai")({
             k.trim() !== "undefined" &&
             k.trim() !== "null";
 
-          const candidateKeys: string[] = [...keys.filter(isCandidateValid).map((k) => k.trim())];
+          const candidateKeys: string[] = [
+            ...keys.filter(isCandidateValid).map((k) => k.trim()),
+          ];
 
           if (serverDevKey && isCandidateValid(serverDevKey)) {
             candidateKeys.push(serverDevKey.trim());
@@ -52,18 +48,15 @@ export const Route = createFileRoute("/api/ai")({
 
           let lastErrorMsg = "";
           let isRateLimited = false;
+          let isKeyRejected = false;
 
           for (let i = 0; i < candidateKeys.length; i++) {
             const apiKey = candidateKeys[i];
             try {
-              const ai = new GoogleGenAI({
-                apiKey,
-                httpOptions: {
-                  headers: {
-                    "User-Agent": "aistudio-build",
-                  },
-                },
-              });
+              // Bug fix #1: Removed httpOptions.headers["User-Agent"] = "aistudio-build".
+              // That header spoofed Google's internal tooling identity and could cause
+              // requests to be blocked or rejected by Google's abuse detection.
+              const ai = new GoogleGenAI({ apiKey });
 
               const response = await ai.models.generateContent({
                 model: "gemini-3.6-flash",
@@ -87,7 +80,18 @@ export const Route = createFileRoute("/api/ai")({
                 isRateLimited = true;
               }
 
-              // Always continue to try remaining candidate keys regardless of individual key failure
+              // Bug fix #3: detect key rejection (400/403) for informative error message
+              if (
+                lower.includes("400") ||
+                lower.includes("403") ||
+                lower.includes("api_key") ||
+                lower.includes("invalid") ||
+                lower.includes("permission")
+              ) {
+                isKeyRejected = true;
+              }
+
+              // Always continue to try remaining candidate keys
               continue;
             }
           }
@@ -98,16 +102,28 @@ export const Route = createFileRoute("/api/ai")({
                 error:
                   candidateKeys.length > 1
                     ? "Semua API key AI sedang mencapai limit. Silakan tunggu beberapa menit lalu coba lagi."
-                    : "Server AI sedang padat. Masukkan Kunci AI Pribadi di Pengaturan → Kunci AI Pribadi.",
+                    : "Server AI sedang padat. Masukkan Kunci AI Pribadi di Pengaturan → Kunci AI Pribadi untuk tetap bisa generate.",
                 isQuotaError: true,
               },
               { status: 429 },
             );
           }
 
+          // Bug fix #3: informative error when key is rejected by Google
+          if (isKeyRejected) {
+            return Response.json(
+              {
+                error:
+                  "API Key ditolak Google. Pastikan key Anda format baru (AQ...) dari Google AI Studio dan sudah di-restrict ke Generative Language API. Cek Pengaturan → Kunci AI Pribadi.",
+              },
+              { status: 403 },
+            );
+          }
+
           return Response.json(
             {
               error:
+                lastErrorMsg ||
                 "API Key Gemini tidak valid atau tidak memiliki akses. Silakan masukkan Kunci AI Pribadi di Pengaturan → Kunci AI Pribadi.",
             },
             { status: 400 },
