@@ -1,11 +1,11 @@
-// Google Gemini client — Server-Proxy with Hybrid Key System & Fallback
+// Google Gemini client — Server-Proxy with Hybrid BYOK + Developer Key Fallback
 //
-// Priority order:
+// Key priority order:
 //   1. User's personal keys from localStorage (bucici_gemini_key_1/_2/_3)
-//   2. Server's process.env.GEMINI_API_KEY / VITE_GEMINI_API_KEY
+//   2. VITE_GEMINI_API_KEY from client env (intentional — set in Vercel for direct REST fallback)
 //
-// All calls are proxied through /api/ai server endpoint using the official @google/genai SDK
-// with gemini-3.6-flash.
+// All calls are proxied through /api/ai server endpoint (uses GEMINI_API_KEY server-side).
+// Direct REST is used as fallback if server proxy fails.
 
 import { currentUser } from "@/lib/store";
 
@@ -38,11 +38,14 @@ export function getPersonalKeys(): string[] {
   return keys;
 }
 
-/** Returns developer centralized key from env if available on client. */
+/**
+ * Bug fix #6: Client-side dev key uses only VITE_GEMINI_API_KEY.
+ * process.env.GEMINI_API_KEY is not available in the browser bundle.
+ * The server-side key is handled exclusively in /api/ai via process.env.GEMINI_API_KEY.
+ * VITE_GEMINI_API_KEY is intentionally set in Vercel so direct REST fallback also works.
+ */
 function getDevKey(): string | undefined {
-  const envKey = (import.meta.env.VITE_GEMINI_API_KEY ||
-    (typeof process !== "undefined" ? process.env?.GEMINI_API_KEY : undefined)) as
-    string | undefined;
+  const envKey = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
   return envKey?.trim() || undefined;
 }
 
@@ -112,17 +115,24 @@ export class GeminiQuotaExhaustedError extends Error {
   }
 }
 
-// ─── Direct REST Fallback (if server proxy fails) ─────────────────────────────
+// ─── Direct REST Fallback ─────────────────────────────────────────────────────
 
+/**
+ * Bug fix #2: Always send API key via x-goog-api-key header for ALL key formats.
+ * Both AQ. (new auth keys) and AIzaSy (standard API keys) must use the header.
+ * The ?key= query param method is deprecated and will stop working for standard keys.
+ */
 function buildRequest(
   endpoint: string,
   key: string,
 ): { url: string; headers: Record<string, string> } {
-  const isNewFormat = key.startsWith("AQ.");
-  const url = isNewFormat ? endpoint : `${endpoint}?key=${key}`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (isNewFormat) headers["x-goog-api-key"] = key;
-  return { url, headers };
+  return {
+    url: endpoint,
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": key,
+    },
+  };
 }
 
 async function askGeminiDirectRest(prompt: string, system?: string): Promise<string> {
@@ -136,6 +146,8 @@ async function askGeminiDirectRest(prompt: string, system?: string): Promise<str
     ...(system ? { systemInstruction: { role: "system", parts: [{ text: system }] } } : {}),
   };
 
+  let lastError: Error | null = null;
+
   for (let i = 0; i < keys.length; i++) {
     const { key, isPersonal } = keys[i];
     const { url, headers } = buildRequest(`${BASE}/${TEXT_MODEL}:generateContent`, key);
@@ -147,10 +159,20 @@ async function askGeminiDirectRest(prompt: string, system?: string): Promise<str
       throw new GeminiQuotaExhaustedError(isPersonal);
     }
 
+    // Bug fix #4: on 400/403, try next key instead of immediately throwing
+    if (res.status === 400 || res.status === 403) {
+      const t = await res.text();
+      console.warn(`[askGeminiDirectRest] key[${i}] rejected (${res.status}): ${t.slice(0, 100)}`);
+      lastError = new Error(
+        "API Key ditolak Google. Pastikan key Anda format baru (AQ...) dari Google AI Studio dan sudah di-restrict ke Generative Language API. Cek Pengaturan → Kunci AI Pribadi.",
+      );
+      continue; // try next key
+    }
+
     if (!res.ok) {
       const t = await res.text();
-      if (res.status === 403) throw new Error("API key tidak valid atau tidak memiliki akses.");
-      throw new Error(`Gemini error ${res.status}: ${t.slice(0, 200)}`);
+      lastError = new Error(`Gemini error ${res.status}: ${t.slice(0, 200)}`);
+      continue;
     }
 
     const data = (await res.json()) as {
@@ -160,10 +182,10 @@ async function askGeminiDirectRest(prompt: string, system?: string): Promise<str
     return text || "(kosong)";
   }
 
-  throw new Error("Gagal menghubungi AI. Coba lagi.");
+  throw lastError ?? new Error("Gagal menghubungi AI. Coba lagi.");
 }
 
-// ─── Main askGemini implementation ───────────────────────────────────────────
+// ─── Main askGemini ───────────────────────────────────────────────────────────
 
 export async function askGemini(prompt: string, system?: string): Promise<string> {
   const personalKeys = getPersonalKeys();
@@ -172,11 +194,7 @@ export async function askGemini(prompt: string, system?: string): Promise<string
     const res = await fetch("/api/ai", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        prompt,
-        system,
-        keys: personalKeys,
-      }),
+      body: JSON.stringify({ prompt, system, keys: personalKeys }),
     });
 
     if (res.ok) {
@@ -197,13 +215,8 @@ export async function askGemini(prompt: string, system?: string): Promise<string
       throw new Error(errData.error);
     }
   } catch (err) {
-    if (err instanceof GeminiQuotaExhaustedError) {
-      throw err;
-    }
-    console.warn(
-      "[askGemini] Server proxy failed or returned error, attempting direct REST fallback:",
-      err,
-    );
+    if (err instanceof GeminiQuotaExhaustedError) throw err;
+    console.warn("[askGemini] Server proxy failed, attempting direct REST fallback:", err);
     try {
       return await askGeminiDirectRest(prompt, system);
     } catch (fallbackErr) {
