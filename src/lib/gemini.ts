@@ -2,7 +2,7 @@
 //
 // Key priority order:
 //   1. User's personal keys from localStorage (bucici_gemini_key_1/_2/_3)
-//   2. VITE_GEMINI_API_KEY from client env (intentional — set in Vercel for direct REST fallback)
+//   2. VITE_GEMINI_API_KEY from client env (for direct REST fallback only)
 //
 // All calls are proxied through /api/ai server endpoint (uses GEMINI_API_KEY server-side).
 // Direct REST is used as fallback if server proxy fails.
@@ -38,12 +38,7 @@ export function getPersonalKeys(): string[] {
   return keys;
 }
 
-/**
- * Client-side dev key uses only VITE_GEMINI_API_KEY.
- * process.env.GEMINI_API_KEY is not available in the browser bundle.
- * The server-side key is handled exclusively in /api/ai via process.env.GEMINI_API_KEY.
- * VITE_GEMINI_API_KEY is intentionally set in Vercel so direct REST fallback also works.
- */
+/** Client-side dev key — only VITE_GEMINI_API_KEY is available in browser bundle. */
 function getDevKey(): string | undefined {
   const envKey = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
   return envKey?.trim() || undefined;
@@ -118,21 +113,19 @@ export class GeminiQuotaExhaustedError extends Error {
 // ─── Direct REST Fallback ─────────────────────────────────────────────────────
 
 /**
- * All Gemini API key formats (AQ. and AIzaSy) use x-goog-api-key header.
- * Do NOT use Authorization: Bearer — that expects an OAuth2 token, not an API key.
- * The ?key= query param is deprecated and should not be used.
+ * AQ. keys use x-goog-api-key header (direct REST — no User-Agent possible here,
+ * so AQ keys may still fail in fallback; primary path is /api/ai server proxy).
+ * AIzaSy keys use ?key= query param (legacy standard keys).
  */
 function buildRequest(
   endpoint: string,
   key: string,
 ): { url: string; headers: Record<string, string> } {
-  return {
-    url: endpoint,
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": key,
-    },
-  };
+  const isNewFormat = key.startsWith("AQ.");
+  const url = isNewFormat ? endpoint : `${endpoint}?key=${key}`;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (isNewFormat) headers["x-goog-api-key"] = key;
+  return { url, headers };
 }
 
 async function askGeminiDirectRest(prompt: string, system?: string): Promise<string> {
@@ -157,14 +150,6 @@ async function askGeminiDirectRest(prompt: string, system?: string): Promise<str
     if (res.status === 429) {
       if (i < keys.length - 1) continue;
       throw new GeminiQuotaExhaustedError(isPersonal);
-    }
-
-    // 400, 401, 403: key rejected — try next key
-    if (res.status === 400 || res.status === 401 || res.status === 403) {
-      const t = await res.text();
-      console.warn(`[askGeminiDirectRest] key[${i}] rejected (${res.status}): ${t.slice(0, 150)}`);
-      lastError = new Error(`Gemini error ${res.status}: ${t.slice(0, 300)}`);
-      continue;
     }
 
     if (!res.ok) {
