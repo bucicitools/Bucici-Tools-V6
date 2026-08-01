@@ -39,7 +39,7 @@ export function getPersonalKeys(): string[] {
 }
 
 /**
- * Bug fix #6: Client-side dev key uses only VITE_GEMINI_API_KEY.
+ * Client-side dev key uses only VITE_GEMINI_API_KEY.
  * process.env.GEMINI_API_KEY is not available in the browser bundle.
  * The server-side key is handled exclusively in /api/ai via process.env.GEMINI_API_KEY.
  * VITE_GEMINI_API_KEY is intentionally set in Vercel so direct REST fallback also works.
@@ -118,21 +118,26 @@ export class GeminiQuotaExhaustedError extends Error {
 // ─── Direct REST Fallback ─────────────────────────────────────────────────────
 
 /**
- * Bug fix #2: Always send API key via x-goog-api-key header for ALL key formats.
- * Both AQ. (new auth keys) and AIzaSy (standard API keys) must use the header.
- * The ?key= query param method is deprecated and will stop working for standard keys.
+ * Auth header strategy for different key formats:
+ * - AQ. prefix (new Google AI Studio auth keys): use Authorization: Bearer
+ * - AIzaSy prefix (standard API keys): use x-goog-api-key header
+ * - Unknown format: try x-goog-api-key first (most common)
+ *
+ * 401 Unauthorized is the signal that the wrong auth method was used.
  */
 function buildRequest(
   endpoint: string,
   key: string,
 ): { url: string; headers: Record<string, string> } {
-  return {
-    url: endpoint,
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": key,
-    },
-  };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (key.startsWith("AQ.") || key.startsWith("AQ-")) {
+    // New Google AI Studio auth key format — requires Bearer token auth
+    headers["Authorization"] = `Bearer ${key}`;
+  } else {
+    // Standard API key format (AIzaSy...) — use x-goog-api-key header
+    headers["x-goog-api-key"] = key;
+  }
+  return { url: endpoint, headers };
 }
 
 async function askGeminiDirectRest(prompt: string, system?: string): Promise<string> {
@@ -159,14 +164,14 @@ async function askGeminiDirectRest(prompt: string, system?: string): Promise<str
       throw new GeminiQuotaExhaustedError(isPersonal);
     }
 
-    // Bug fix #4: on 400/403, try next key instead of immediately throwing
-    if (res.status === 400 || res.status === 403) {
+    // 400, 401, 403: key rejected — try next key
+    if (res.status === 400 || res.status === 401 || res.status === 403) {
       const t = await res.text();
-      console.warn(`[askGeminiDirectRest] key[${i}] rejected (${res.status}): ${t.slice(0, 100)}`);
+      console.warn(`[askGeminiDirectRest] key[${i}] rejected (${res.status}): ${t.slice(0, 150)}`);
       lastError = new Error(
-        "API Key ditolak Google. Pastikan key Anda format baru (AQ...) dari Google AI Studio dan sudah di-restrict ke Generative Language API. Cek Pengaturan → Kunci AI Pribadi.",
+        `Gemini error ${res.status}: ${t.slice(0, 200)}`,
       );
-      continue; // try next key
+      continue;
     }
 
     if (!res.ok) {
