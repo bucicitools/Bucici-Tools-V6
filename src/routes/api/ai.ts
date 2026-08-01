@@ -18,7 +18,7 @@ export const Route = createFileRoute("/api/ai")({
             return Response.json({ error: "Prompt wajib diisi." }, { status: 400 });
           }
 
-          // Bug fix #5: Use only process.env.GEMINI_API_KEY on the server.
+          // Use only process.env.GEMINI_API_KEY on the server.
           // import.meta.env.VITE_* is NOT available in server context (TanStack Start SSR).
           const serverDevKey = process.env.GEMINI_API_KEY;
 
@@ -48,14 +48,12 @@ export const Route = createFileRoute("/api/ai")({
 
           let lastErrorMsg = "";
           let isRateLimited = false;
-          let isKeyRejected = false;
 
           for (let i = 0; i < candidateKeys.length; i++) {
             const apiKey = candidateKeys[i];
             try {
-              // Bug fix #1: Removed httpOptions.headers["User-Agent"] = "aistudio-build".
-              // That header spoofed Google's internal tooling identity and could cause
-              // requests to be blocked or rejected by Google's abuse detection.
+              // Removed httpOptions.headers["User-Agent"] = "aistudio-build" — was spoofing
+              // Google's internal tooling identity and causing requests to be rejected.
               const ai = new GoogleGenAI({ apiKey });
 
               const response = await ai.models.generateContent({
@@ -67,8 +65,14 @@ export const Route = createFileRoute("/api/ai")({
               const text = response.text || "(kosong)";
               return Response.json({ text, usedKeyIndex: i });
             } catch (err) {
-              const errorMsg = err instanceof Error ? err.message : String(err);
+              // Capture full error details — SDK errors can have empty .message
+              const errorMsg =
+                err instanceof Error
+                  ? err.message || err.name || String(err)
+                  : String(err);
               lastErrorMsg = errorMsg;
+
+              console.error(`[/api/ai] key[${i}] error:`, errorMsg);
 
               const lower = errorMsg.toLowerCase();
               if (
@@ -78,17 +82,6 @@ export const Route = createFileRoute("/api/ai")({
                 lower.includes("resource_exhausted")
               ) {
                 isRateLimited = true;
-              }
-
-              // Bug fix #3: detect key rejection (400/403) for informative error message
-              if (
-                lower.includes("400") ||
-                lower.includes("403") ||
-                lower.includes("api_key") ||
-                lower.includes("invalid") ||
-                lower.includes("permission")
-              ) {
-                isKeyRejected = true;
               }
 
               // Always continue to try remaining candidate keys
@@ -109,17 +102,7 @@ export const Route = createFileRoute("/api/ai")({
             );
           }
 
-          // Bug fix #3: informative error when key is rejected by Google
-          if (isKeyRejected) {
-            return Response.json(
-              {
-                error:
-                  "API Key ditolak Google. Pastikan key Anda format baru (AQ...) dari Google AI Studio dan sudah di-restrict ke Generative Language API. Cek Pengaturan → Kunci AI Pribadi.",
-              },
-              { status: 403 },
-            );
-          }
-
+          // Return the actual error message from the last attempt so users can diagnose
           return Response.json(
             {
               error:
@@ -129,9 +112,10 @@ export const Route = createFileRoute("/api/ai")({
             { status: 400 },
           );
         } catch (err) {
-          console.error("[API /api/ai handler error]", err);
+          const msg = err instanceof Error ? err.message || String(err) : String(err);
+          console.error("[API /api/ai handler error]", msg);
           return Response.json(
-            { error: `Kesalahan server AI: ${(err as Error).message}` },
+            { error: `Kesalahan server AI: ${msg}` },
             { status: 500 },
           );
         }
