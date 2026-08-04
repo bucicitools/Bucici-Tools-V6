@@ -19,7 +19,6 @@ export const Route = createFileRoute("/api/ai")({
           }
 
           // Server-side only: process.env.GEMINI_API_KEY
-          // import.meta.env.VITE_* is NOT available in server context (TanStack Start SSR)
           const serverDevKey = process.env.GEMINI_API_KEY;
 
           const candidateKeys: string[] = [
@@ -46,24 +45,17 @@ export const Route = createFileRoute("/api/ai")({
           for (let i = 0; i < candidateKeys.length; i++) {
             const apiKey = candidateKeys[i];
             try {
-              // User-Agent "aistudio-build" is required for AQ. format keys issued by Google AI Studio.
-              // Without this header, Google rejects AQ keys with ACCESS_TOKEN_TYPE_UNSUPPORTED.
-              const ai = new GoogleGenAI({
-                apiKey,
-                httpOptions: {
-                  headers: {
-                    "User-Agent": "aistudio-build",
-                  },
-                },
-              });
+              const ai = new GoogleGenAI({ apiKey });
 
-              const response = await ai.models.generateContent({
+              // Use Interactions API — recommended for AQ. auth keys (Google AI Studio default since 2026).
+              // ai.models.generateContent() does NOT support AQ. keys (ACCESS_TOKEN_TYPE_UNSUPPORTED).
+              const interaction = await ai.interactions.create({
                 model: "gemini-3.6-flash",
-                contents: prompt,
+                input: prompt,
                 ...(system ? { config: { systemInstruction: system } } : {}),
               });
 
-              const text = response.text || "(kosong)";
+              const text = interaction.output_text || "(kosong)";
               return Response.json({ text, usedKeyIndex: i });
             } catch (err) {
               const errorMsg =
@@ -83,7 +75,6 @@ export const Route = createFileRoute("/api/ai")({
                 isRateLimited = true;
               }
 
-              // Always try next key regardless of error type
               continue;
             }
           }
