@@ -1,17 +1,15 @@
-// Google Gemini client — Server-Proxy with Hybrid BYOK + Developer Key Fallback
+// AI client — OpenAI backend with Hybrid BYOK + Developer Key Fallback
 //
 // Key priority order:
-//   1. User's personal keys from localStorage (bucici_gemini_key_1/_2/_3)
-//   2. VITE_GEMINI_API_KEY from client env (for direct REST fallback only)
+//   1. User's personal OpenAI keys from localStorage (bucici_ai_key_1/_2/_3)
+//   2. VITE_OPENAI_API_KEY from client env (direct REST fallback)
 //
-// All calls are proxied through /api/ai server endpoint (uses GEMINI_API_KEY server-side).
-// Direct REST is used as fallback if server proxy fails.
+// All calls are proxied through /api/ai server endpoint (uses OPENAI_API_KEY server-side).
+// Direct REST fallback to OpenAI API if server proxy fails.
 
 import { currentUser } from "@/lib/store";
 
-const TEXT_MODEL = "gemini-3.6-flash";
-const BASE = "https://generativelanguage.googleapis.com/v1beta/models";
-
+// Keep slot names generic so localStorage data persists across migrations
 export const GEMINI_KEY_SLOTS = [
   "bucici_gemini_key_1",
   "bucici_gemini_key_2",
@@ -38,9 +36,9 @@ export function getPersonalKeys(): string[] {
   return keys;
 }
 
-/** Client-side dev key — only VITE_GEMINI_API_KEY is available in browser bundle. */
+/** Client-side dev key — only VITE_OPENAI_API_KEY is available in browser bundle. */
 function getDevKey(): string | undefined {
-  const envKey = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
+  const envKey = import.meta.env.VITE_OPENAI_API_KEY as string | undefined;
   return envKey?.trim() || undefined;
 }
 
@@ -110,42 +108,31 @@ export class GeminiQuotaExhaustedError extends Error {
   }
 }
 
-// ─── Direct REST Fallback ─────────────────────────────────────────────────────
+// ─── Direct REST Fallback (OpenAI) ────────────────────────────────────────────
 
-/**
- * AQ. keys use x-goog-api-key header (direct REST — no User-Agent possible here,
- * so AQ keys may still fail in fallback; primary path is /api/ai server proxy).
- * AIzaSy keys use ?key= query param (legacy standard keys).
- */
-function buildRequest(
-  endpoint: string,
-  key: string,
-): { url: string; headers: Record<string, string> } {
-  const isNewFormat = key.startsWith("AQ.");
-  const url = isNewFormat ? endpoint : `${endpoint}?key=${key}`;
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (isNewFormat) headers["x-goog-api-key"] = key;
-  return { url, headers };
-}
-
-async function askGeminiDirectRest(prompt: string, system?: string): Promise<string> {
+async function askOpenAIDirectRest(prompt: string, system?: string): Promise<string> {
   const keys = getAllGeminiKeys();
   if (keys.length === 0) {
     throw new Error("Tidak ada API key yang dikonfigurasi.");
   }
 
-  const body = {
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    ...(system ? { systemInstruction: { role: "system", parts: [{ text: system }] } } : {}),
-  };
+  const messages: Array<{ role: string; content: string }> = [];
+  if (system) messages.push({ role: "system", content: system });
+  messages.push({ role: "user", content: prompt });
 
   let lastError: Error | null = null;
 
   for (let i = 0; i < keys.length; i++) {
     const { key, isPersonal } = keys[i];
-    const { url, headers } = buildRequest(`${BASE}/${TEXT_MODEL}:generateContent`, key);
 
-    const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({ model: "gpt-4o-mini", messages }),
+    });
 
     if (res.status === 429) {
       if (i < keys.length - 1) continue;
@@ -154,21 +141,21 @@ async function askGeminiDirectRest(prompt: string, system?: string): Promise<str
 
     if (!res.ok) {
       const t = await res.text();
-      lastError = new Error(`Gemini error ${res.status}: ${t.slice(0, 200)}`);
+      lastError = new Error(`OpenAI error ${res.status}: ${t.slice(0, 200)}`);
       continue;
     }
 
     const data = (await res.json()) as {
-      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      choices?: Array<{ message?: { content?: string } }>;
     };
-    const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+    const text = data?.choices?.[0]?.message?.content ?? "";
     return text || "(kosong)";
   }
 
   throw lastError ?? new Error("Gagal menghubungi AI. Coba lagi.");
 }
 
-// ─── Main askGemini ───────────────────────────────────────────────────────────
+// ─── Main askGemini (kept same name for compatibility) ────────────────────────
 
 export async function askGemini(prompt: string, system?: string): Promise<string> {
   const personalKeys = getPersonalKeys();
@@ -201,7 +188,7 @@ export async function askGemini(prompt: string, system?: string): Promise<string
     if (err instanceof GeminiQuotaExhaustedError) throw err;
     console.warn("[askGemini] Server proxy failed, attempting direct REST fallback:", err);
     try {
-      return await askGeminiDirectRest(prompt, system);
+      return await askOpenAIDirectRest(prompt, system);
     } catch (fallbackErr) {
       if (fallbackErr instanceof GeminiQuotaExhaustedError) throw fallbackErr;
       throw err instanceof Error ? err : new Error(String(err));
