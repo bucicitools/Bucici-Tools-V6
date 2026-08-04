@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { GoogleGenAI } from "@google/genai";
 
 export const Route = createFileRoute("/api/ai")({
   server: {
@@ -18,8 +17,9 @@ export const Route = createFileRoute("/api/ai")({
             return Response.json({ error: "Prompt wajib diisi." }, { status: 400 });
           }
 
-          // Server-side only: process.env.GEMINI_API_KEY
-          const serverDevKey = process.env.GEMINI_API_KEY;
+          // Server-side: OPENAI_API_KEY (developer key, fallback)
+          // Personal keys passed from client take priority
+          const serverDevKey = process.env.OPENAI_API_KEY;
 
           const candidateKeys: string[] = [
             ...keys.filter((k) => typeof k === "string" && k.trim().length > 0).map((k) => k.trim()),
@@ -45,36 +45,45 @@ export const Route = createFileRoute("/api/ai")({
           for (let i = 0; i < candidateKeys.length; i++) {
             const apiKey = candidateKeys[i];
             try {
-              const ai = new GoogleGenAI({ apiKey });
+              const messages: Array<{ role: string; content: string }> = [];
+              if (system) messages.push({ role: "system", content: system });
+              messages.push({ role: "user", content: prompt });
 
-              // Use Interactions API — recommended for AQ. auth keys (Google AI Studio default since 2026).
-              // ai.models.generateContent() does NOT support AQ. keys (ACCESS_TOKEN_TYPE_UNSUPPORTED).
-              const interaction = await ai.interactions.create({
-                model: "gemini-3.6-flash",
-                input: prompt,
-                ...(system ? { config: { systemInstruction: system } } : {}),
+              const res = await fetch("https://api.openai.com/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${apiKey}`,
+                },
+                body: JSON.stringify({
+                  model: "gpt-4o-mini",
+                  messages,
+                }),
               });
 
-              const text = interaction.output_text || "(kosong)";
-              return Response.json({ text, usedKeyIndex: i });
-            } catch (err) {
-              const errorMsg =
-                err instanceof Error
-                  ? err.message || err.name || String(err)
-                  : String(err);
-              console.error(`[API /api/ai] key #${i} failed:`, errorMsg);
-              lastErrorMsg = errorMsg;
+              if (res.ok) {
+                const data = (await res.json()) as {
+                  choices?: Array<{ message?: { content?: string } }>;
+                };
+                const text = data?.choices?.[0]?.message?.content || "(kosong)";
+                return Response.json({ text, usedKeyIndex: i });
+              }
 
-              const lower = errorMsg.toLowerCase();
-              if (
-                lower.includes("429") ||
-                lower.includes("quota") ||
-                lower.includes("rate limit") ||
-                lower.includes("resource_exhausted")
-              ) {
+              const errText = await res.text();
+              const errMsg = `OpenAI error ${res.status}: ${errText.slice(0, 200)}`;
+              console.error(`[API /api/ai] key #${i} failed:`, errMsg);
+              lastErrorMsg = errMsg;
+
+              if (res.status === 429) {
                 isRateLimited = true;
               }
 
+              continue;
+            } catch (err) {
+              const errorMsg =
+                err instanceof Error ? err.message || err.name || String(err) : String(err);
+              console.error(`[API /api/ai] key #${i} network error:`, errorMsg);
+              lastErrorMsg = errorMsg;
               continue;
             }
           }
